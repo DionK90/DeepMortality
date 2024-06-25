@@ -548,16 +548,21 @@ class HmdError():
         self.df_error = df_error        
 
     def add_model(self, df_error:pd.DataFrame, model_name:str, measure_name:str):
+        # Add model information on the given dataframe
         if(model_name is not None):
             df_error['model'] = model_name
+        # Add measure (performance measure or mean error type) on the given dataframe
         if(measure_name is not None):
             df_error['measure'] = measure_name
-        pass
+
+        # Concatenate the given error dataframe to this object
+        self.df_error = pd.concat((self.df_error, df_error), ignore_index=True)
+        
 
     def lineplot_sex_type(self):
         pass
 
-    def barplot_sex_type(self):
+    def barplot_sex_type(self, x:str, y:str, hue:str, style:str):
         # Create a figure    
         # sexes = df_error.sex.unique()
         # types = df_error.type.unique()
@@ -571,8 +576,8 @@ class HmdError():
         #         # Plot the barplot
         #         curr_ax = axs[idx_type, idx_sex]
         #         sns.lineplot(x='age', y='log_mortality', hue='model', style='model',
-        #                     data=df_age_errors.loc[(df_age_errors.type == each_type) & 
-        #                                             (df_age_errors.sex==each_sex),:],
+        #                     data=df_error.loc[(df_error.type == each_type) & 
+        #                                       (df_error.sex==each_sex),:],
         #                     ax=curr_ax, errorbar=None)
 
         #         # Put information
