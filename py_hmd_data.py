@@ -4,9 +4,12 @@ import matplotlib.pyplot as plt
 
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib
 
 from typing import List
 from typing import Type
+from typing import Callable
+import warnings
 
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.api import VAR
@@ -17,6 +20,12 @@ TYPE_DATA_DEATH = 'death'
 TYPE_DATA_EXP = 'exposure'
 TYPE_DATA_M = 'mortality'
 TYPE_DATA_LM = 'log_mortality'
+
+TYPE_ERROR_MSE = 'mse'
+TYPE_ERROR_MAPE = 'mape'
+TYPE_ERROR_MPE = 'mpe'
+TYPE_ERROR_MAE = 'mae'
+AVAIL_ERRORS = [TYPE_ERROR_MSE, TYPE_ERROR_MAE, TYPE_ERROR_MPE, TYPE_ERROR_MAPE]
 
 TYPE_RES_DF = 'df'
 TYPE_RES_NP = 'np'
@@ -226,14 +235,7 @@ class HmdMortalityData():
                                    start_year=start_year, end_year=end_year, start_age=start_age, end_age=end_age)
         
         # Determine the name of the column depending on the data type requested
-        if(data_type == TYPE_DATA_EXP):
-            value_name = "exposure"
-        elif(data_type == TYPE_DATA_M):
-            value_name = "mortality"
-        elif(data_type == TYPE_DATA_LM):
-            value_name = "log_mortality"
-        elif(data_type == TYPE_DATA_DEATH):
-            value_name = "death"
+        value_name = data_type        
             
         # Melt the dataframe into long format
         if df_returned is not None:
@@ -422,16 +424,26 @@ class HmdMortalityData():
             return None
         
 class HmdResidualData():
-    def __init__(self, df_true_long:pd.DataFrame, df_pred_long:pd.DataFrame,
-                 year_train_end, year_val_end = None):
+    """
+    """
+    def __init__(self, df_true_long:pd.DataFrame, df_pred_long:pd.DataFrame, data_type:str,
+                 year_train_end:int, year_val_end:int = None):
+        """
+        Residual is defined as true values - predicted values.    
+        Args:
+            df_true_long(pd.DataFrame): a dataframe with the same structure as HMD-COD mortality dataset containing the true values of mortality (or death or log mortality) in a long format
+            df_pred_long(pd.DataFrame): a dataframe with the same structure as HMD-COD mortality dataset containing the predicted values of mortality (or death or log mortality) in a long format
+            data_type(str): a string describing the data type contained (see available constants in the module, such as death, mortality, or log mortality) 
+        """
         self.df_true = df_true_long
         self.df_pred = df_pred_long
+        self.data_type = data_type
 
         # Calculate the residuals (by sorting first, then applying a matrix operation)
         self.df_true.sort_values(by=py_params.COL_CO_YR_SX_CA, inplace=True)
         self.df_pred.sort_values(by=py_params.COL_CO_YR_SX_CA, inplace=True)
         self.df_res = self.df_true.copy()
-        self.df_res.loc[:,"log_mortality"] = self.df_pred.loc[:,"log_mortality"].values - self.df_true.loc[:,"log_mortality"].values            
+        self.df_res.loc[:,data_type] = self.df_true.loc[:,data_type].values - self.df_pred.loc[:,data_type].values
 
         # Add info on which ones are train, valid (if specified) and test data
         self.df_res['type'] = py_params.TYPE_TRAIN
@@ -441,19 +453,132 @@ class HmdResidualData():
         else:
             self.df_res.loc[(self.df_res.year > year_train_end), 'type'] = py_params.TYPE_TEST
 
-    def residual(self, res_type:str, by:List[str]):
+    def residual(self, operation:Callable=None):
+        """
+        Get the residual dataframe with an option to apply an operation to each residual. 
+        Args:
+            operation(callable): operation to be done to each residual, such as square or absolute. Give none to get the raw residual.
+        Returns:
+            A dataframe with HMD-COD variables in a long format containing the residuals.
+        """
         df_returned = self.df_res.copy()
 
-        # if(res_type == (TYPE_RES_Ddf_returned = self.df_res.loc[df_returned = self.df_res.year > year_train_end + ) & (TYPE_RES_Ddf_returned = self.df_res.loc[df_returned = self.df_res.year > year_train_end <= year_val_end)
-        #     return df_returned, 'type'] = py_params.TYPE_VAL
-        #     return df_returned, 'type'] = py_params.TYPE_Vvalyear_val_end:py_params.TYPE_VAL
-        # elif(TYPE_TEST
+        # If no operation is applied, return a copy of the residual dataframe
+        if operation is None:
+            return df_returned    
+        
+        # Apply the operation to all residuals
+        df_returned.loc[:, self.data_type] = operation(df_returned.loc[:, self.data_type])
+        return df_returned
+        
+    def error(self, by:List[str], error_type:str = TYPE_ERROR_MSE):
+        """
+        Get the mean errors, grouped by the given features (columns) in the "by" parameters.
+        Supported type of errors can be seen in the AVAIL_ERRORS constant in this module.
+        Args:
+            - by(List[str])
+            - error_type
+        Returns:
 
-    def mse(self, res_type:str, by:List[str]):
+
+        """
+        # Check the error_type        
+        if error_type not in AVAIL_ERRORS:
+            raise ValueError("Error type is not yet supported. See available constants in the module.")
+
+        # apply square operation to the residual
+        df_returned = None
+        if(error_type == TYPE_ERROR_MSE):
+            df_returned = self.residual(np.square)
+        elif(error_type == TYPE_ERROR_MAE):
+            df_returned = self.residual(np.abs)
+        # Case for MPE and MAPE 
+        else:        
+            df_returned = self.residual()
+            df_returned.loc[:, self.data_type] = df_returned.loc[:, self.data_type].values / self.df_true.loc[:, self.data_type].values
+            # special case for MAPE, which is MPE with absolute
+            if(error_type == TYPE_ERROR_MAPE):
+                df_returned.loc[:, self.data_type] = np.abs(df_returned.loc[:, self.data_type].values)        
+        
+        # Check if "by" is None (calculate the mean error of the dataframe)
+        if by is None:
+            return df_returned.loc[:, self.data_type].mean()
+
+        # Check whether the "by" parameters match with the columns in the HMD dataset
+        if(not(set(by).issubset(self.df_res.columns))):
+            warnings.warn(f"Warning: The 'by' parameters must be from the columns of the HMD dataset: {self.df_res.columns}")
+        # Remove duplicates
+        by = list(set(by))
+        # Error when the number of samples after grouping is too small.        
+        num_samples = self.df_res.groupby(by=by).count().min().iloc[0]
+        if num_samples < 30:
+            raise ValueError(f"Too many categorical features, the number of samples per group ({num_samples}) may not be reliable.")        
+
+        # group by the squared residuals according to the "by" parameter, and calculate the average for each group
+        return df_returned.groupby(by=by)[self.data_type].mean().reset_index()
+
+    def heatmap(self, sex, cause, ax = None):                    
+        sns.heatmap(data = self.df_res.loc[(self.df_res.sex == sex) & (self.df_res.cause==cause), ['year', 'age', 'log_mortality']].pivot(index='age', values='log_mortality', columns='year'),
+                    cmap="RdYlBu", ax=ax)        
+        if(ax is None):
+            plt.title(f"Residual {py_params.BIDICT_SEX_1_2[sex]}-{py_params.BIDICT_CAUSE_1_HMD[cause]}")
+            plt.show()     
+        else:
+            ax.set_title(f"Residual {py_params.BIDICT_SEX_1_2[sex]}-{py_params.BIDICT_CAUSE_1_HMD[cause]}")
+           
+
+
+class HmdError():
+    """
+    A class to store mean errors from forecasts on HMD dataset using various models.
+    The main purpose of the class is to ease collecting forecasting errors from various models,
+    and to easily plot the various models for visualization.
+
+    The class is to be used
+    """
+    def __init__(self, df_error:pd.DataFrame, columns:List[str]):
+        # Error checking for the two parameters
+        if(df_error is None and columns is None):
+            raise ValueError("One of 'df_error' or 'columns' parameter must be given to determine the required information for the errors.")
+        if(df_error is not None and columns is not None):
+            if(df_error.columns != columns):
+                raise ValueError("Both 'df_error' and 'columns' parameter must contain the same columns to determine the required information for the errors.")
+        
+        # Store the error
+        self.df_error = df_error        
+
+    def add_model(self, df_error:pd.DataFrame, model_name:str, measure_name:str):
+        if(model_name is not None):
+            df_error['model'] = model_name
+        if(measure_name is not None):
+            df_error['measure'] = measure_name
         pass
 
-    def heatmap(self, by:List[str]):
+    def lineplot_sex_type(self):
         pass
 
-    def _summarize(self, by:List[str]):
+    def barplot_sex_type(self):
+        # Create a figure    
+        # sexes = df_error.sex.unique()
+        # types = df_error.type.unique()
+        # matplotlib.rcParams.update(matplotlib.rcParamsDefault)
+        # fig, axs = plt.subplots(ncols=len(sexes), nrows=len(types), figsize=(9, 10))
+        # fig.suptitle(f"Errors Across Ages")
+
+        # # Draw separate plot for each selected cause
+        # for idx_type, each_type in enumerate(types):
+        #     for idx_sex, each_sex in enumerate(sexes):    
+        #         # Plot the barplot
+        #         curr_ax = axs[idx_type, idx_sex]
+        #         sns.lineplot(x='age', y='log_mortality', hue='model', style='model',
+        #                     data=df_age_errors.loc[(df_age_errors.type == each_type) & 
+        #                                             (df_age_errors.sex==each_sex),:],
+        #                     ax=curr_ax, errorbar=None)
+
+        #         # Put information
+        #         curr_ax.set_title(f"{each_type}-{py_params.BIDICT_SEX_1_2[each_sex]}")       
+        #         curr_ax.xaxis.set_major_locator(plt.MaxNLocator(6)) 
+
+        # plt.show();
         pass
+
