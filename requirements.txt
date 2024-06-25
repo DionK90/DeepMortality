@@ -20,7 +20,6 @@ matplotlib-inline
 numpy
 pandas
 pmdarima
-pytorch-lightning
 ray
 scikit-learn
 scipy
@@ -30,11 +29,6 @@ sympy
 tensorboard
 tensorboard-data-server
 tensorboardX
-torch
-torchmetrics
-torchsummary
-torchvision
-torchviz
 tqdm
 typing_extensions
 voila
